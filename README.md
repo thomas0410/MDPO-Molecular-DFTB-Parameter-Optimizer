@@ -12,7 +12,10 @@
 ## 🌟 Overview
 
 **MDPO (Molecular DFTB Parameter Optimizer)** is a **lightweight and automated Python tool** designed to optimize molecular properties through **DFTB parameter calibration**.  
-It enables researchers to efficiently tune, validate, and test DFTB parameters on molecular systems using automated workflows and modern optimization algorithms.
+It enables researchers to efficiently tune, validate, and test DFTB parameters targeting specific molecular properties.
+Currently, MDPO supports optimization of **ground-state (S₀) energy**, **excitation energy (S₁-S₀ gap)**, and **both simultaneously**.
+Future extensions will include **HOMO–LUMO gap**, **geometric parameters** (bond length, bond angle, dihedral angle), **vibrational frequencies**, and **potential energy surfaces (PES)** as optimization objectives.
+
 
 ---
 
@@ -21,7 +24,8 @@ It enables researchers to efficiently tune, validate, and test DFTB parameters o
 - 🔹 Automated DFTB parameter optimization workflow  
 - 🔹 Support for molecular systems and dataset-level fitting  
 - 🔹 Lightweight, modular structure for research and educational use  
-- 🔹 Easy to customize input/output routines for different molecular datasets  
+- 🔹 Easy to customize input/output routines for different molecular datasets
+- ⚡ Supports multi-objective optimization combining ground- and excited-state energy fitting
 ---
 
 ## 🧩 Requirements and Environment Setup
@@ -48,7 +52,10 @@ To run this tool successfully, make sure that:
 1. **DFTB+** is installed and accessible from the command line (i.e., the command `dftb+` works in your terminal).  
    Installation guide: [https://dftbplus.org/download/](https://dftbplus.org/download/)
 2. You have appropriate **Slater–Koster parameter sets** (e.g., mio, 3ob, or your own customized files).  
-   MDPO automatically calls DFTB+ for single-point calculations and extracts total energies, dipoles, and other target properties.
+   MDPO automatically calls DFTB+ for single-point calculations and extracts total energies and other target properties.
+3. ⚠️ Note: MDPO does not provide any initial DFTB parameter files.
+   Please obtain suitable Slater–Koster parameter sets from the official DFTB parameter repository:
+   👉 https://dftb.org/parameters/download.html
 
 ---
 
