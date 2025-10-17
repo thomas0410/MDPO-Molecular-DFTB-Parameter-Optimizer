@@ -41,7 +41,7 @@ If you use this repository or part of its code in your research, please cite the
 
 ```bibtex
 @misc{MDPO2025,
-  author       = {Thomas},
+  author       = {Tsai, Chi-Chang},
   title        = {MDPO: Molecular DFTB Parameter Optimizer},
   year         = {2025},
   howpublished = {\url{https://github.com/<your-username>/MDPO}},
