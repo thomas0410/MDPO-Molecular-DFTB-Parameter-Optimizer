@@ -20,6 +20,7 @@ It enables researchers to efficiently tune, validate, and test DFTB parameters t
 Currently, MDPO supports optimization of **ground-state (S₀) energy**, **excitation energy (S₁-S₀ gap)**, and **both simultaneously**.
 
 Future extensions will include **HOMO–LUMO gap**, **geometric parameters** (bond length, bond angle, dihedral angle), **vibrational frequencies**, and **potential energy surfaces (PES)** as optimization objectives.
+
 ---
 
 ## ⚙️ Features
