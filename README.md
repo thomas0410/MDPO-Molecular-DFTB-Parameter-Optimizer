@@ -96,6 +96,6 @@ If you use this repository or part of its code in your research, please cite the
   author       = {Tsai, Chi-Chang},
   title        = {MDPO: Molecular DFTB Parameter Optimizer},
   year         = {2025},
-  howpublished = {\url{https://github.com/thomas0410/MDPO-Molecular-DFTB-Parameter-Optimizer-/tree/main}},
+  howpublished = {\url{https://github.com/thomas0410/MDPO-Molecular-DFTB-Parameter-Optimizer}},
   note         = {Conceptually inspired by Liu et al., J. Chem. Theory Comput., 2024.}
 }
