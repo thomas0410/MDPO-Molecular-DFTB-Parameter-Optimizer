@@ -5,12 +5,12 @@
 [![Status](https://img.shields.io/badge/status-active-success.svg)]()
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 ![DFTB](https://img.shields.io/badge/DFTB-Parameterization-orange.svg)
-
 ---
 
 ### 🚧 Development Notice
 > **This is a preliminary version of MDPO, currently under active development.**  
 > The user manual and documentation will be updated soon.
+---
 
 ## 🌟 Overview
 
@@ -20,8 +20,6 @@ It enables researchers to efficiently tune, validate, and test DFTB parameters t
 Currently, MDPO supports optimization of **ground-state (S₀) energy**, **excitation energy (S₁-S₀ gap)**, and **both simultaneously**.
 
 Future extensions will include **HOMO–LUMO gap**, **geometric parameters** (bond length, bond angle, dihedral angle), **vibrational frequencies**, and **potential energy surfaces (PES)** as optimization objectives.
-
-
 ---
 
 ## ⚙️ Features
