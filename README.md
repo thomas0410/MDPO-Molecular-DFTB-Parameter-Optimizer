@@ -63,7 +63,7 @@ To run this tool successfully, make sure that:
 
 ### 🧠 Recommended System Setup
 - **Operating System:** Linux or macOS  
-- **Python:** 3.4 or higher  
+- **Python:** 3.10 or higher  
 ---
 
 ### 🔬 References
