@@ -8,7 +8,6 @@
 
 ---
 ## 🚧 MDPO — Development Version
-
    This is a preliminary version of MDPO. The user manual will soon be upadated.
 ---
 
