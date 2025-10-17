@@ -12,6 +12,7 @@
 ## 🌟 Overview
 
 **MDPO (Molecular DFTB Parameter Optimizer)** is a **lightweight and automated Python tool** designed to optimize molecular properties through **DFTB parameter calibration**.  
+
 It enables researchers to efficiently tune, validate, and test DFTB parameters targeting specific molecular properties.
 Currently, MDPO supports optimization of **ground-state (S₀) energy**, **excitation energy (S₁-S₀ gap)**, and **both simultaneously**.
 
