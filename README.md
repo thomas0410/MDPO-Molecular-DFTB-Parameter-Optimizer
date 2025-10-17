@@ -27,7 +27,7 @@ It enables researchers to efficiently tune, validate, and test DFTB parameters o
 ## 🧩 Requirements and Environment Setup
 
 ### 🐍 Python Environment
-This project is written in **Python 3.4+** and relies primarily on the Python standard library and **NumPy**.
+This project is written in **Python 3.10+** and relies primarily on the Python standard library and **NumPy**.
 
 The following Python modules are required:
 ```python
@@ -58,10 +58,10 @@ To run this tool successfully, make sure that:
 ---
 
 ### 🔬 References
-- **DFTB+**: Aradi, B., Hourahine, B., & Frauenheim, T. (2007).  
-  *DFTB+, a sparse matrix-based implementation of the DFTB method.*  
-  *Journal of Physical Chemistry A*, 111(26), 5678–5684.  
-  [https://doi.org/10.1021/jp070186p](https://doi.org/10.1021/jp070186p)
+- **DFTB+**: Hourahine, B., Aradi, B., Blum, V., Bonafé, F., … Frauenheim, T. (2020).
+DFTB+, a software package for efficient approximate density functional theory based atomistic simulations.
+Journal of Chemical Physics, 152(12), 124101.
+https://pubs.aip.org/aip/jcp/article/152/12/124101/953756/DFTB-a-software-package-for-efficient-approximate
 
 The MDPO code independently provides an automated interface for molecular DFTB parameter tuning  
 and can be combined with existing DFTB+ workflows for property-driven optimization.
