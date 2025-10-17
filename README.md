@@ -11,7 +11,6 @@
 ### 🚧 Development Notice
 > **This is a preliminary version of MDPO, currently under active development.**  
 > The user manual and documentation will be updated soon.
---
 
 ## 🌟 Overview
 
