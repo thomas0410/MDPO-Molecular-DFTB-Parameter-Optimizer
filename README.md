@@ -5,7 +5,7 @@
 [![Status](https://img.shields.io/badge/status-active-success.svg)]()
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 ![DFTB](https://img.shields.io/badge/DFTB-Parameterization-orange.svg)
----
+
 
 ### 🚧 Development Notice
 > **This is a preliminary version of MDPO, currently under active development.**  
