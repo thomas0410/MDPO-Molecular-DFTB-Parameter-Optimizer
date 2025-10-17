@@ -921,7 +921,7 @@ def create_template_files(
         templates_dir: 存放 dftb_in.hsd 模板的目錄。
         ref_file: 參考數據檔案的路徑。
         skf_dir: 存放基礎 SKF 檔案的目錄。
-        all_element_pairs: 計算中所有會用到的元素配對 (e.g., ["C-H", "Sn-O"])。
+        all_element_pairs: 計算中所有會用到的元素配對 (e.g., ["C-H", "H-O"])。
         optimizing_skf_pairs: 指定要優化的 SKF 配對。
         extra_hsd_content: 可選的、要附加到 dftb_in.hsd 中的額外內容字串。
     """
@@ -968,7 +968,7 @@ Hamiltonian = DFTB {{
         H  = "s"
         C  = "p"
         O  = "p"
-        Sn = "d"
+        Fe = "d"
     }}
     SlaterKosterFiles {{
 {skf_block_str}
@@ -997,7 +997,7 @@ ParserOptions {{ ParserVersion = 14 }}
         struct_path = Path(data_dir, f"struct{i}.xyz")
         if not struct_path.exists():
             print(f"Creating template: {struct_path}")
-            struct_path.write_text("4\n\nC 0.0 0.0 0.0\nH 1.1 0.0 0.0\nH -0.4 0.9 0.0\nSn 0.0 0.0 1.8\n")
+            struct_path.write_text("4\n\nC 0.0 0.0 0.0\nH 1.1 0.0 0.0\nH -0.4 0.9 0.0\nFe 0.0 0.0 1.8\n")
 
 # =============================================================================
 # [7] Main Entry Point & Project Orchestrator
@@ -1231,7 +1231,7 @@ def main():
     # 集中設定區：在此處自由修改您的專案設定
     # =================================================================
     # 1. 指定您這次想要優化的 SKF 配對
-    SKF_PAIRS_TO_OPTIMIZE = ["Sn-Sn", "Sn-C", "Sn-O", "Sn-H"]
+    SKF_PAIRS_TO_OPTIMIZE = ["C-C", "H-C", "H-O"]
     
     # 2. 在此處加入任何您想客製化的 DFTB+ HSD 內容
     EXTRA_HSD_BLOCK = """
