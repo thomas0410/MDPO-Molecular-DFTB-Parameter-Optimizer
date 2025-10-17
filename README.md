@@ -6,7 +6,6 @@
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 ![DFTB](https://img.shields.io/badge/DFTB-Parameterization-orange.svg)
 
----
 ## 🚧 MDPO — Development Version
    This is a preliminary version of MDPO. The user manual will soon be upadated.
 ---
