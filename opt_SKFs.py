@@ -237,7 +237,7 @@ class ParsedSKFile:
         然後回傳一個 ParsedSKFile 物件實例。
         
         此函式已重構，可正確處理 Simple/Extended 格式  
-        並在正確位置解析 Polynomial  或 Spline [cite: 77]。
+        並在正確位置解析 Polynomial  或 Spline。
         """
         path = Path(filepath)
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
@@ -251,7 +251,7 @@ class ParsedSKFile:
         # 檢查第一行是否有 '@' 來判斷是否為 "Extended Format"
         is_extended = lines[0].strip().startswith('@')
         
-        # 根據格式規範 [cite: 20, 53, 66, 73]，決定標頭的行數和 Poly Repulsive 所在行
+        # 根據格式規範，決定標頭的行數和 Poly Repulsive 所在行
         poly_rep_line_idx = -1
         if is_homo:
             if is_extended:
@@ -1082,7 +1082,7 @@ def create_template_files(
         templates_dir: 存放 dftb_in.hsd 模板的目錄。
         ref_file: 參考數據檔案的路徑。
         skf_dir: 存放基礎 SKF 檔案的目錄。
-        all_element_pairs: 計算中所有會用到的元素配對 (e.g., ["C-H", "Sn-O"])。
+        all_element_pairs: 計算中所有會用到的元素配對 (e.g., ["C-H", "Ni-O"])。
         optimizing_skf_pairs: 指定要優化的 SKF 配對。
         extra_hsd_content: 可選的、要附加到 dftb_in.hsd 中的額外內容字串。
     """
@@ -1129,7 +1129,7 @@ Hamiltonian = DFTB {{
         H  = "s"
         C  = "p"
         O  = "p"
-        Sn = "d"
+        Fe = "d"
     }}
     SlaterKosterFiles {{
 {skf_block_str}
@@ -1402,7 +1402,7 @@ def main():
     # 集中設定區：在此處自由修改您的專案設定
     # =================================================================
     # 1. 指定您這次想要優化的 SKF 配對
-    SKF_PAIRS_TO_OPTIMIZE = ["Sn-Sn", "Sn-C", "Sn-O", "Sn-H"]
+    SKF_PAIRS_TO_OPTIMIZE = [""]
     
     # 2. 在此處加入任何您想客製化的 DFTB+ HSD 內容
     EXTRA_HSD_BLOCK = """
