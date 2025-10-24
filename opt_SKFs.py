@@ -49,7 +49,64 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Sequence, Optional, Callable, Dict, Any, Set
 import numpy as np
+import logging
 
+# =============================================================================
+# Logging setup
+# =============================================================================
+def setup_logger(log_path: str) -> logging.Logger:
+    """Create a module-level logger that writes to both console and a file (PBS-tail friendly)."""
+    logger = logging.getLogger("skf_opt")
+    logger.setLevel(logging.INFO)
+    # Clear existing handlers to avoid duplicates on resume
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+    fmt = logging.Formatter(fmt="%(asctime)s | %(levelname)s | %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S")
+
+    # 在建立日誌處理程式之前，確保日誌檔案的目錄存在
+    try:
+        log_dir = Path(log_path).parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Warning: Could not create log directory {log_dir}. Error: {e}")
+        
+    fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+    # try to flush immediately (useful on PBS)
+    for h in logger.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+    return logger
+    
+import fcntl  # Add to imports at top
+
+def _save_ckpt(state: Dict[str, Any], ckpt_path: Path) -> None:
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = ckpt_path.with_suffix('.tmp')
+    try:
+        with open(temp_path, 'wb') as fo:
+            # Lock file during write
+            try:
+                fcntl.flock(fo.fileno(), fcntl.LOCK_EX)
+            except (AttributeError, OSError):
+                # fcntl not available on Windows, skip locking
+                pass
+            pickle.dump(state, fo)
+        # Atomic rename
+        temp_path.replace(ckpt_path)
+    except Exception as e:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise e
 
 # =============================================================================
 # [2] Core Data Structures & SKF File I/O
@@ -73,6 +130,7 @@ class ParsedSKFile:
     rep_in_header: bool = False
     rep_rel_start: int = -1
     rep_rel_end: int = -1
+    rep_mass: Optional[float] = None  # <-- 【新增】儲存 mass 欄位
     
     # --- Private Helper Methods (formerly standalone functions) ---
     
@@ -87,54 +145,61 @@ class ParsedSKFile:
         return out
 
     @classmethod
-    def _parse_repulsive(cls, lines: List[str], text_lines: List[str], table_end_idx: int) -> Tuple[Dict, Dict]:
+    def _parse_polynomial_repulsive(cls, line: str) -> Optional[Dict[str, Any]]:
         """
-        從檔案的所有行中解析 Repulsive 區塊 (支援 Spline 或 Polynomial)。
+        [新函式] 僅嘗試從「單一字串行」中解析 Polynomial Repulsive 資料。
+        """
+        try:
+            tokens = line.strip().split()
+            # 根據 ，至少要有 mass + c2-c9 (8) + rcut (1) = 10 個欄位
+            if len(tokens) >= 10:
+                nums = cls._expand_tokens(line)
+                if len(nums) >= 10:
+                    mass = nums[0]  # <-- 【修正】保存 mass 欄位
+                    coeffs = nums[1:] # c2 在 coeffs[0], rcut 在 coeffs[8]
+                    rep_data = {
+                        'type': 'polynomial',
+                        'mass': mass,
+                        'c': coeffs[:8], # 抓取 c2 到 c9 (共 8 個)
+                        'rcut': coeffs[8] if len(coeffs) >= 9 else 0.0
+                    }
+                    return rep_data
+        except (ValueError, IndexError):
+            return None # 解析失敗
+        return None
 
-        解析策略：
-        1. 優先在檔案中尋找 "Spline" 關鍵字。
-        2. 如果找不到 Spline，則嘗試尋找符合 Polynomial 格式的長數字行。
-        3. 找到後，記錄其在原始檔案中的絕對起始/結束行號，以便後續判斷其相對位置。
+    @classmethod
+    def _parse_spline_repulsive(cls, lines: List[str]) -> Tuple[Optional[Dict], int, int]:
         """
-        rep_data = {}
-        # Always report absolute positions in rep_info
-        rep_info = {"rep_in_header": False, "rep_rel_start": -1, "rep_rel_end": -1}
-        # 優先尋找 Spline
+        [新函式] 僅在給定的行列表（例如 trailing_lines）中搜尋「Spline」區塊。
+        """
+        text_lines = [ln.strip() for ln in lines]
         for i, ln in enumerate(text_lines):
             if ln.lower().startswith("spline"):
-                nInt, cutoff = cls._expand_tokens(text_lines[i+1])
-                nInt, cutoff = int(nInt), float(cutoff)
-                a1, a2, a3 = cls._expand_tokens(text_lines[i+2])
-                segs = []
-                for j in range(nInt-1):
-                    s, e, c0, c1, c2, c3 = cls._expand_tokens(text_lines[i+3+j])
-                    segs.append({'start': s, 'end': e, 'c': [c0,c1,c2,c3]})
-                last = cls._expand_tokens(text_lines[i+3+(nInt-1)])
-                s, e, c0, c1, c2, c3, c4, c5 = last
-                segs.append({'start': s, 'end': e, 'c': [c0,c1,c2,c3,c4,c5]})
-                rep_data = {'type': 'spline', 'cutoff': cutoff, 'nInt': nInt, 'exp': (a1,a2,a3), 'segments': segs}
-                block_len = 3 + nInt
-                abs_start, abs_end = i, i + block_len
-                # Always set absolute indices
-                rep_info = {"rep_in_header": False, "rep_rel_start": -1, "rep_rel_end": -1}
-                rep_info.update({"abs_start": abs_start, "abs_end": abs_end})
-                return rep_data, rep_info
-        # 如果找不到 Spline，再尋找 Polynomial
-        for i, ln in enumerate(lines):
-            try:
-                if len(ln.strip().split()) >= 10:
-                    nums = cls._expand_tokens(ln)
-                    if len(nums) >= 12:
-                        coeffs = nums[1:]
-                        rep_data = {'type': 'polynomial', 'c': coeffs[:8], 'rcut': coeffs[8] if len(coeffs) >= 9 else 0.0}
-                        rep_info.update({"abs_start": i, "abs_end": i + 1})
-                        return rep_data, rep_info
-            except (ValueError, IndexError):
-                continue
-        if not rep_data:
-            raise ValueError("No repulsive data found (Spline or Polynomial)")
-        return rep_data, rep_info
+                try:
+                    nInt, cutoff = cls._expand_tokens(text_lines[i+1])
+                    nInt, cutoff = int(nInt), float(cutoff)
+                    a1, a2, a3 = cls._expand_tokens(text_lines[i+2])
+                    segs = []
+                    # 解析 nInt-1 個標準 spline 段
+                    for j in range(nInt-1):
+                        s, e, c0, c1, c2, c3 = cls._expand_tokens(text_lines[i+3+j])
+                        segs.append({'start': s, 'end': e, 'c': [c0,c1,c2,c3]})
+                    # 解析最後一個 spline 段 (格式不同)
+                    last = cls._expand_tokens(text_lines[i+3+(nInt-1)])
+                    s, e, c0, c1, c2, c3, c4, c5 = last
+                    segs.append({'start': s, 'end': e, 'c': [c0,c1,c2,c3,c4,c5]})
+                    
+                    rep_data = {'type': 'spline', 'cutoff': cutoff, 'nInt': nInt, 'exp': (a1,a2,a3), 'segments': segs}
+                    block_len = 3 + nInt
+                    # 回傳 data 和在 lines 中的「相對」位置
+                    return rep_data, i, i + block_len
+                except (ValueError, IndexError) as e:
+                    # 如果找到了 "Spline" 關鍵字但解析失敗，這代表檔案格式錯誤
+                    raise ValueError(f"Found 'Spline' keyword but failed to parse block: {e}")
         
+        return None, -1, -1 # 沒找到 Spline
+
     def _format_repulsive_block(self, rep: Dict[str, Any]) -> List[str]:
         """將 Repulsive 資料字典格式化為要寫入檔案的字串列表"""
         lines = []
@@ -152,9 +217,15 @@ class ParsedSKFile:
             s, e, c = last['start'], last['end'], last['c']
             lines.append(f"{s:.6f} {e:.6f} " + " ".join(f"{ci:.6e}" for ci in c[:6]) + "\n")
         elif rep.get('type') == 'polynomial':
+            mass = rep.get('mass', self.rep_mass or 0.0) # 獲取儲存的 mass
             c2_to_c9, rcut = rep['c'], rep.get('rcut', 0.0)
-            coeffs = " ".join(f"{v:.6e}" for v in ([0.0] + list(c2_to_c9) + [rcut]))
-            lines.append(coeffs + "\n")
+            
+            # 根據 ，格式為 mass c2..c9 rcut d1..d10
+            # 我們補上 10 個 0.0 作為 d1-d10 的佔位符
+            placeholders = " ".join(f"{0.0:.6e}" for _ in range(10))
+            
+            coeffs = " ".join(f"{v:.6e}" for v in ([mass] + list(c2_to_c9) + [rcut]))
+            lines.append(f"{coeffs} {placeholders}\n")
         return lines
 
     # --- Public API Methods ---
@@ -164,18 +235,72 @@ class ParsedSKFile:
         """
         [工廠方法] 從一個 .skf 檔案路徑讀取並解析資料，
         然後回傳一個 ParsedSKFile 物件實例。
+        
+        此函式已重構，可正確處理 Simple/Extended 格式  
+        並在正確位置解析 Polynomial  或 Spline [cite: 77]。
         """
         path = Path(filepath)
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+        if not lines: raise ValueError(f"File {filepath} is empty")
+
         pair_name = path.stem
         elements = pair_name.split('-')
         is_homo = len(elements) == 2 and elements[0] == elements[1]
-        start_idx = 3 if is_homo else 2
-        first = cls._expand_tokens(lines[0])
+
+        # --- 1. 偵測格式並設定索引 ---
+        # 檢查第一行是否有 '@' 來判斷是否為 "Extended Format"
+        is_extended = lines[0].strip().startswith('@')
+        
+        # 根據格式規範 [cite: 20, 53, 66, 73]，決定標頭的行數和 Poly Repulsive 所在行
+        poly_rep_line_idx = -1
+        if is_homo:
+            if is_extended:
+                line_1_idx = 1 # gridDist 在 Line 2 (index 1)
+                start_idx = 4  # 表格從 Line 5 (index 4) 開始
+                poly_rep_line_idx = 3 # Poly 在 Line 4 (index 3)
+            else: # homo-simple
+                line_1_idx = 0 # gridDist 在 Line 1 (index 0)
+                start_idx = 3  # 表格從 Line 4 (index 3) 開始
+                poly_rep_line_idx = 2 # Poly 在 Line 3 (index 2)
+        else: # is_hetero
+            if is_extended:
+                line_1_idx = 1 # gridDist 在 Line 3 (index 2)
+                start_idx = 3  # 表格從 Line 4 (index 3) 開始
+                poly_rep_line_idx = 2 # Poly 在 Line 2 (index 1)
+            else: # hetero-simple
+                line_1_idx = 0 # gridDist 在 Line 1 (index 0)
+                start_idx = 2  # 表格從 Line 3 (index 2) 開始
+                poly_rep_line_idx = 1 # Poly 在 Line 2 (index 1)
+
+        # --- 2. 解析標頭和 Polynomial Repulsive ---
+        first = cls._expand_tokens(lines[line_1_idx])
         grid_dist, n_grid = float(first[0]), int(first[1])
         n_rows = n_grid - 1
         table_end_idx = start_idx + n_rows
         if table_end_idx > len(lines): raise ValueError(f"Insufficient lines in {filepath}")
+
+        repulsive_data = None
+        rep_mass = None
+        self_rep_in_header = False
+        rep_rel_start = -1
+        rep_rel_end = -1
+        
+        # 僅在規範指定的位置嘗試解析 Polynomial
+        if poly_rep_line_idx != -1:
+            repulsive_data = cls._parse_polynomial_repulsive(lines[poly_rep_line_idx])
+        
+        if repulsive_data:
+            # 如果成功解析，從 header_lines 中「移除」該行
+            header_lines = lines[:poly_rep_line_idx] + lines[poly_rep_line_idx+1:start_idx]
+            rep_mass = repulsive_data.get('mass')
+            self_rep_in_header = True
+            rep_rel_start = poly_rep_line_idx # 記錄「絕對」位置
+            rep_rel_end = poly_rep_line_idx + 1
+        else:
+            # 未找到 Poly，標頭保持原樣
+            header_lines = lines[:start_idx]
+
+        # --- 3. 解析 H 和 S 表格 ---
         table_lines = lines[start_idx:table_end_idx]
         if not table_lines: raise ValueError(f"No table data in {filepath}")
         num_cols = len(cls._expand_tokens(table_lines[0]))
@@ -187,42 +312,36 @@ class ParsedSKFile:
         H = {f"H_{i}": list(col) for i, col in enumerate(H_cols)}
         S = {f"S_{i}": list(col) for i, col in enumerate(S_cols)}
         radii = [grid_dist * (i + 1) for i in range(n_rows)]
-        header_lines, trailing_lines = lines[:start_idx], lines[table_end_idx:]
-        # 重新設計 Repulsive 解析的呼叫方式
-        text_lines = [ln.strip() for ln in lines]
-        repulsive_data, rep_info = cls._parse_repulsive(lines, text_lines, table_end_idx)
-        # 使用 _parse_repulsive 回傳的絕對行號，計算 header/trailing 的相對位置
-        rep_abs_start, rep_abs_end = rep_info.get('abs_start', -1), rep_info.get('abs_end', -1)
-        if rep_abs_start == -1 or rep_abs_end == -1:
-            raise ValueError("Repulsive block positions not found")
-        # 預設的切片
-        header_lines = lines[:start_idx]
-        table_lines_full = lines[start_idx:table_end_idx]
+
+        # --- 4. 解析 Spline Repulsive (僅在未找到 Poly 時) ---
         trailing_lines = lines[table_end_idx:]
-        if rep_abs_end <= start_idx:
-            # Repulsive 位於標頭
-            self_rep_in_header = True
-            # 從 header 中移除該區塊，並記錄其相對起點
-            rep_rel_start = rep_abs_start
-            rep_rel_end = rep_abs_end
-            header_lines = lines[:rep_abs_start] + lines[rep_abs_end:start_idx]
-            # 尾端保持表格後的原樣
-            trailing_lines = lines[table_end_idx:]
-        elif rep_abs_start >= table_end_idx:
-            # Repulsive 位於尾端
+        
+        if repulsive_data is None:
+            # 規範說 Spline 是可選的 ，在表格之後
+            # 我們只在 trailing_lines 中尋找 Spline
+            spline_data, rel_start, rel_end = cls._parse_spline_repulsive(trailing_lines)
+            
+            if spline_data:
+                repulsive_data = spline_data
+                self_rep_in_header = False
+                rep_rel_start = rel_start # 相對於 trailing_lines 的位置
+                rep_rel_end = rel_end
+                # 從 trailing_lines 中「移除」Spline 區塊
+                trailing_lines = trailing_lines[:rel_start] + trailing_lines[rel_end:]
+        
+        # 如果 Poly 和 Spline 都沒找到，repulsive_data 保持為 None
+        if repulsive_data is None:
+            repulsive_data = {} # 設為空字典，表示沒有 Repulsive
             self_rep_in_header = False
-            rep_rel_start = rep_abs_start - table_end_idx
-            rep_rel_end = rep_abs_end - table_end_idx
-            trailing_raw = lines[table_end_idx:]
-            trailing_lines = trailing_raw[:rep_rel_start] + trailing_raw[rep_rel_end:]
-        else:
-            # 介於 header 和表格之間或分裂情形屬於格式錯誤
-            raise ValueError("Repulsive block overlaps the main table; unsupported SKF layout")
+            rep_rel_start = 0 # 預設插入到 trailing_lines 的開頭
+            rep_rel_end = 0
+
         return cls(
             filepath=filepath, header_lines=header_lines, trailing_lines=trailing_lines,
             grid_dist=grid_dist, radii=radii, H=H, S=S, repulsive=repulsive_data,
             num_h_cols=num_h_cols, rep_in_header=self_rep_in_header,
-            rep_rel_start=rep_rel_start, rep_rel_end=rep_rel_end
+            rep_rel_start=rep_rel_start, rep_rel_end=rep_rel_end,
+            rep_mass=rep_mass # 儲存 mass
         )
 
     def write(self, outpath: str, modified_H: Dict[str, List[float]]) -> None:
@@ -505,9 +624,18 @@ def spsa_train(
     model: TabulatedModel, evaluate_rmse: Callable, train_cfg: TrainConfig,
     P_ids: np.ndarray, F_pool_ids: np.ndarray, val_ids: Optional[np.ndarray] = None,
     checkpoint_path: Optional[str] = None, save_secs: int = 120, resume: bool = True,
-    stop_flag: Optional[Dict[str, bool]] = None, strata_pools: Optional[List[Tuple[np.ndarray, int]]] = None
+    stop_flag: Optional[Dict[str, bool]] = None, strata_pools: Optional[List[Tuple[np.ndarray, int]]] = None,
+    logger: Optional[logging.Logger] = None
 ) -> Tuple[List[np.ndarray], float, Dict[str, Any]]:
     """SPSA training with checkpointing and multi-start"""
+    
+    # Validation
+    if train_cfg.steps_per_group <= 0:
+        raise ValueError(f"steps_per_group must be > 0, got {train_cfg.steps_per_group}")
+    if train_cfg.starts <= 0:
+        raise ValueError(f"starts must be > 0, got {train_cfg.starts}")
+    if train_cfg.cycles <= 0:
+        raise ValueError(f"cycles must be > 0, got {train_cfg.cycles}")
     
     rng_master = np.random.default_rng(train_cfg.seed)
     theta_len = model.theta_shape()[0]
@@ -521,14 +649,21 @@ def spsa_train(
     if resume and ckpt_path:
         state = _load_ckpt(ckpt_path)
         if state:
-            print(f"Resuming from {ckpt_path}...")
-            locals().update({k: state[k] for k in ['s', 'cyc', 'gpos', 'step', 'tstep', 'best_val', 'history', 'group_order']})
+            (logger or logging.getLogger("skf_opt")).info(f"Resuming from {ckpt_path}...")
+            s = state['s']
+            cyc = state['cyc']
+            gpos = state['gpos']
+            step = state['step']
+            tstep = state['tstep']
+            best_val = state['best_val']
+            history = state['history']
+            group_order = state['group_order']
             theta_list = [np.array(t) for t in state.get('theta_list', [])]
             best_theta = [np.array(t) for t in state.get('best_theta', [])]
             rng_master.bit_generator.state = state.get('rng_master_state', rng_master.bit_generator.state)
     
     while s < train_cfg.starts:
-        print(f"\n--- SPSA Multi-start {s+1}/{train_cfg.starts} ---")
+        (logger or logging.getLogger("skf_opt")).info(f"\n--- SPSA Multi-start {s+1}/{train_cfg.starts} ---")
         rng = np.random.default_rng(rng_master.integers(1<<30))
         
         if not theta_list:
@@ -605,7 +740,7 @@ def spsa_train(
                     history["t"].append(tstep)
                     if v < best_val:
                         best_val, best_theta = v, [t.copy() for t in theta_list]
-                        print(f"  > Step {tstep}: New best val loss: {best_val:.6f}")
+                        (logger or logging.getLogger("skf_opt")).info(f"  > Step {tstep}: New best val loss: {best_val:.6f}")
                 
                 now = time.time()
                 should_save = ckpt_path and ((now - last_save) >= save_secs)
@@ -621,9 +756,9 @@ def spsa_train(
                             'rng_master_state': rng_master.bit_generator.state,
                         }, ckpt_path)
                         last_save = now
-                        print(f"--- Checkpoint saved at step {tstep} ---")
+                        (logger or logging.getLogger("skf_opt")).info(f"--- Checkpoint saved at step {tstep} ---")
                     if killed:
-                        print("Stop requested, checkpoint saved.")
+                        (logger or logging.getLogger("skf_opt")).info("Stop requested, checkpoint saved.")
                         logs = {"history": history, "resume_ckpt": str(ckpt_path) if ckpt_path else None}
                         return best_theta, best_val, logs
                 
@@ -635,7 +770,7 @@ def spsa_train(
                 gpos = 0
                 group_order = []
                 cyc += 1
-                print(f"--- Completed Cycle {cyc}/{train_cfg.cycles} ---")
+                (logger or logging.getLogger("skf_opt")).info(f"--- Completed Cycle {cyc}/{train_cfg.cycles} ---")
         
         all_runs.append((best_val, [t.copy() for t in best_theta], {"history": history}))
         theta_list = []
@@ -705,7 +840,7 @@ class DFTBPlusRunner:
         try:
             shutil.copy2(geometry_path, geom_dst)
         except FileNotFoundError:
-            print(f"Error: Geometry file {geometry_path} not found")
+            logging.getLogger("skf_opt").warning(f"Error: Geometry file {geometry_path} not found")
             return None
         # Avoid str.format() because HSD uses many literal braces `{}`; do simple placeholder replacement instead
         hsd_content = (self.dftb_template
@@ -723,7 +858,7 @@ class DFTBPlusRunner:
         results = {}
         output_content = log_path.read_text(encoding='utf-8', errors='ignore')
         if 'ground_state' in self.calc_reqs:
-            match = re.search(r"Total Energy:\s+([\-\d\.]+)\s+eV", output_content)
+            match = re.search(r"Total Energy:.*?\s+([\-\d\.]+)\s+eV", output_content)
             if match:
                 results['S0'] = float(match.group(1))
         if 'casida' in self.calc_reqs:
@@ -732,10 +867,16 @@ class DFTBPlusRunner:
                 try:
                     # Read lines keeping UTF-8 but be forgiving about encoding
                     lines = exc_dat_path.read_text(encoding='utf-8', errors='ignore').splitlines()
-
-                    # Find the separator line made of '=' characters (DFTB+ Casida format)
-                    # We consider a line a separator if, after stripping spaces, it contains only '='
-                    sep_idx = next((i for i, ln in enumerate(lines) if ln.strip() and set(ln.strip()) == {'='}), -1)
+                    
+                    if not lines:
+                        logging.getLogger("skf_opt").warning(f"Warning: {exc_dat_path.name} is empty")
+                    else:
+                        # Find separator line
+                        sep_idx = -1
+                        for i, ln in enumerate(lines):
+                            if ln.strip() and set(ln.strip()) == {'='}:
+                                sep_idx = i
+                                break
 
                     # Start scanning after the separator if found; otherwise from top
                     start_idx = sep_idx + 1 if sep_idx != -1 else 0
@@ -757,7 +898,7 @@ class DFTBPlusRunner:
                         results['Excitation'] = first_energy
                 except Exception as e:
                     # Keep going, but surface a concise warning for debugging
-                    print(f"Warning: Error parsing {exc_dat_path.name}: {e}")
+                    logging.getLogger("skf_opt").warning(f"Warning: Error parsing {exc_dat_path.name}: {e}")
         return [results.get('S0'), results.get('Excitation')]
 
     def evaluate_batch(self, Y_by_file: List[Dict[str, List[float]]],
@@ -796,7 +937,7 @@ class DFTBPlusRunner:
                             pred_vals = future.result()
                             results.append((pred_vals, ref_vals))
                         except Exception as exc:
-                            print(f"A calculation task generated an exception: {exc}")
+                            logging.getLogger("skf_opt").warning(f"A calculation task generated an exception: {exc}")
                             results.append((None, ref_vals))
             else: # 單線程執行
                 for i, task in enumerate(tasks):
@@ -1048,6 +1189,8 @@ class SKFOptimizationProject:
         
         # 處理優化目標設定
         self._process_target_settings()
+        
+        self.logger: Optional[logging.Logger] = None
 
     def _process_target_settings(self):
         """根據 args 解析並設定優化目標、權重和計算需求。"""
@@ -1073,10 +1216,10 @@ class SKFOptimizationProject:
 
     def _setup_project_templates(self):
         """掃描 SKF 目錄並建立 dftb_in.hsd 模板和 ref.txt 範例。"""
-        print("Scanning SKF directory and setting up templates...")
+        self.logger.info("Scanning SKF directory and setting up templates...")
         self.paths["skf"].mkdir(exist_ok=True)
         discovered_skfs = sorted([p.stem for p in self.paths["skf"].glob("*.skf")])
-        print(f"Discovered {len(discovered_skfs)} SKF pairs in '{self.paths['skf']}/'.")
+        self.logger.info(f"Discovered {len(discovered_skfs)} SKF pairs in '{self.paths['skf']}/'.")
 
         create_template_files(
             data_dir=str(self.paths["data"]),
@@ -1090,13 +1233,18 @@ class SKFOptimizationProject:
 
     def setup(self):
         """執行所有優化前的準備工作。"""
-        print("\n--- [1/3] Setting up Project ---")
+        # initialize logger (place the log under runs/ if a relative path is provided)
+        log_path = Path(self.args.log_file)
+        if not log_path.is_absolute():
+            log_path = self.paths["runs"] / log_path
+        self.logger = setup_logger(str(log_path))
+        self.logger.info("\n--- [1/3] Setting up Project ---")
         self.paths["runs"].mkdir(exist_ok=True)
         self._setup_project_templates()
 
         # 載入資料集
         self.dataset = load_dataset(str(self.paths["ref"]), str(self.paths["data"]), num_targets=self.num_targets)
-        print(f"Loaded {len(self.dataset)} structures from {self.paths['ref']}")
+        self.logger.info(f"Loaded {len(self.dataset)} structures from {self.paths['ref']}")
         
         # 建立完整的 SKF 優化列表 (含 A-B, B-A) 和參數映射
         full_opt_list = []
@@ -1131,7 +1279,7 @@ class SKFOptimizationProject:
             dftb_template=dftb_template,
             calculation_requirements=self.calc_reqs
         )
-        print("Project setup complete.")
+        self.logger.info("Project setup complete.")
 
     def _prepare_data_pools(self) -> Tuple[np.ndarray, np.ndarray, Optional[List[Tuple[np.ndarray, int]]]]:
         """準備永久集、浮動集和分層抽樣池。"""
@@ -1141,14 +1289,14 @@ class SKFOptimizationProject:
         # =================================================================
         # ▼▼▼ 在這裡加入自動偵測邏輯 ▼▼▼
         # =================================================================
-        # 設定自動切換模式的數據量閾值
-        AUTO_ALL_DATA_THRESHOLD = 100
+        # Use configurable threshold instead of hardcoded
+        AUTO_ALL_DATA_THRESHOLD = self.args.auto_all_threshold
 
         # 判斷數據集大小是否小於閾值
         if n < AUTO_ALL_DATA_THRESHOLD:
-            print(f"INFO: Dataset size ({n}) is less than the threshold ({AUTO_ALL_DATA_THRESHOLD}).")
-            print("      Automatically using the entire dataset for optimization.")
-            print("      All sampling-related arguments (--permanent, --strata, etc.) will be ignored.")
+            self.logger.info(f"Dataset size ({n}) is less than the threshold ({AUTO_ALL_DATA_THRESHOLD}).")
+            self.logger.info("Automatically using the entire dataset for optimization.")
+            self.logger.info("All sampling-related arguments (--permanent, --strata, etc.) will be ignored.")
             
             # 準備返回：P_ids 設為全部, F_pool_ids 設為空, strata_pools 設為 None
             all_indices = np.arange(n)
@@ -1158,8 +1306,8 @@ class SKFOptimizationProject:
         # =================================================================
 
         # 如果數據量大於等於閾值，則執行原始的抽樣邏輯
-        print(f"INFO: Dataset size ({n}) is greater than or equal to the threshold.")
-        print("      Using sampling strategy defined by command-line arguments.")
+        self.logger.info(f"Dataset size ({n}) is greater than or equal to the threshold.")
+        self.logger.info("Using sampling strategy defined by command-line arguments.")
         P_ids = np.array(_parse_int_list(self.args.permanent), dtype=int) - 1
         P_ids = P_ids[(P_ids >= 0) & (P_ids < n)]
         
@@ -1176,9 +1324,9 @@ class SKFOptimizationProject:
         
     def _save_results(self, best_theta_list: List[np.ndarray], best_val: float):
         """合成並儲存優化後的 SKF 檔案及參數。"""
-        print("\n" + "="*50)
-        print("Optimization Complete!")
-        print(f"Best objective value: {best_val:.6e}")
+        self.logger.info("\n" + "="*50)
+        self.logger.info("Optimization Complete!")
+        self.logger.info(f"Best objective value: {best_val:.6e}")
         
         self.paths["optimized_skf"].mkdir(exist_ok=True)
         final_H_by_file, _ = self.model.synthesize(best_theta_list)
@@ -1187,18 +1335,18 @@ class SKFOptimizationProject:
             sk_data = self.sk_data_map[pair_name]
             out_path = self.paths["optimized_skf"] / f"{pair_name}.skf"
             sk_data.write(out_path, final_H_by_file[i]) # 使用重構後的 write 方法
-            print(f"Saved optimized {pair_name}.skf to {out_path}")
+            self.logger.info(f"Saved optimized {pair_name}.skf to {out_path}")
         
         optimized_params = {key: theta.tolist() for key, theta in zip(self.model.param_keys, best_theta_list)}
-        print("\nFinal optimized parameters:\n" + json.dumps(optimized_params, indent=2))
-        print("="*50)
+        self.logger.info("\nFinal optimized parameters:\n" + json.dumps(optimized_params, indent=2))
+        self.logger.info("="*50)
 
     def run(self):
         """執行 SPSA 優化流程。"""
         if not all([self.model, self.dftb_runner, self.dataset]):
             raise RuntimeError("Project is not set up. Please call project.setup() before running.")
 
-        print("\n--- [2/3] Starting SPSA Optimization ---")
+        self.logger.info("\n--- [2/3] Starting SPSA Optimization ---")
         
         # 建立目標函式
         evaluate_rmse_func = create_objective_function(
@@ -1219,14 +1367,14 @@ class SKFOptimizationProject:
         # 執行訓練
         best_theta_list, best_val, _ = spsa_train(
             self.model, evaluate_rmse_func, train_cfg, P_ids, F_pool_ids, val_ids=val_ids,
-            checkpoint_path=str(self.paths["ckpt"]), resume=True, strata_pools=strata_pools
+            checkpoint_path=str(self.paths["ckpt"]), resume=True, strata_pools=strata_pools, logger=self.logger
         )
         
         # 清理停止標記
         stop_marker = self.paths["ckpt"].with_suffix('.STOP')
         if stop_marker.exists(): stop_marker.unlink()
         
-        print("\n--- [3/3] Processing Final Results ---")
+        self.logger.info("\n--- [3/3] Processing Final Results ---")
         self._save_results(best_theta_list, best_val)
 
 def main():
@@ -1245,6 +1393,9 @@ def main():
     parser.add_argument("--no-strata", action="store_true")
     parser.add_argument("--batch-P", type=int, default=10)
     parser.add_argument("--batch-F", type=int, default=40)
+    parser.add_argument("--log-file", type=str, default="skf_opt.log")
+    parser.add_argument("--auto-all-threshold", type=int, default=100,
+                    help="Dataset size threshold below which all data is used (default: 100)")
     args, _ = parser.parse_known_args()
     
     # =================================================================
@@ -1279,7 +1430,7 @@ ExcitedState {
         
     except Exception as e:
         import traceback
-        print(f"\nFATAL ERROR: Script execution failed. Reason: {e}")
+        logging.getLogger("skf_opt").exception(f"\nFATAL ERROR: Script execution failed. Reason: {e}")
         traceback.print_exc()
 
 if __name__ == '__main__':
