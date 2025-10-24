@@ -730,14 +730,34 @@ class DFTBPlusRunner:
             exc_dat_path = work_dir / "EXC.DAT"
             if exc_dat_path.exists():
                 try:
-                    exc_lines = exc_dat_path.read_text().splitlines()
-                    # 尋找 '===' 分隔線後的第一個能量值
-                    sep_idx = next((i for i, line in enumerate(exc_lines) if "====" in line), -1)
-                    if sep_idx != -1 and sep_idx + 1 < len(exc_lines):
-                        first_exc_energy = float(exc_lines[sep_idx + 1].split()[0])
-                        results['Excitation'] = first_exc_energy
-                except (ValueError, IndexError) as e:
-                     print(f"Warning: Error parsing {exc_dat_path.name}: {e}")
+                    # Read lines keeping UTF-8 but be forgiving about encoding
+                    lines = exc_dat_path.read_text(encoding='utf-8', errors='ignore').splitlines()
+
+                    # Find the separator line made of '=' characters (DFTB+ Casida format)
+                    # We consider a line a separator if, after stripping spaces, it contains only '='
+                    sep_idx = next((i for i, ln in enumerate(lines) if ln.strip() and set(ln.strip()) == {'='}), -1)
+
+                    # Start scanning after the separator if found; otherwise from top
+                    start_idx = sep_idx + 1 if sep_idx != -1 else 0
+
+                    # Regex to capture a leading float number (with optional exponent) at line start
+                    num_re = re.compile(r"^[\s]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)[\s]+")
+
+                    first_energy = None
+                    for j in range(start_idx, len(lines)):
+                        ln = lines[j].strip()
+                        if not ln or ln.startswith('#'):
+                            continue  # skip blanks/comments
+                        m = num_re.match(ln)
+                        if m:
+                            # Column 1 is w [eV]
+                            first_energy = float(m.group(1))
+                            break
+                    if first_energy is not None:
+                        results['Excitation'] = first_energy
+                except Exception as e:
+                    # Keep going, but surface a concise warning for debugging
+                    print(f"Warning: Error parsing {exc_dat_path.name}: {e}")
         return [results.get('S0'), results.get('Excitation')]
 
     def evaluate_batch(self, Y_by_file: List[Dict[str, List[float]]],
@@ -921,7 +941,7 @@ def create_template_files(
         templates_dir: 存放 dftb_in.hsd 模板的目錄。
         ref_file: 參考數據檔案的路徑。
         skf_dir: 存放基礎 SKF 檔案的目錄。
-        all_element_pairs: 計算中所有會用到的元素配對 (e.g., ["C-H", "H-O"])。
+        all_element_pairs: 計算中所有會用到的元素配對 (e.g., ["C-H", "Sn-O"])。
         optimizing_skf_pairs: 指定要優化的 SKF 配對。
         extra_hsd_content: 可選的、要附加到 dftb_in.hsd 中的額外內容字串。
     """
@@ -968,7 +988,7 @@ Hamiltonian = DFTB {{
         H  = "s"
         C  = "p"
         O  = "p"
-        Fe = "d"
+        Sn = "d"
     }}
     SlaterKosterFiles {{
 {skf_block_str}
@@ -997,7 +1017,7 @@ ParserOptions {{ ParserVersion = 14 }}
         struct_path = Path(data_dir, f"struct{i}.xyz")
         if not struct_path.exists():
             print(f"Creating template: {struct_path}")
-            struct_path.write_text("4\n\nC 0.0 0.0 0.0\nH 1.1 0.0 0.0\nH -0.4 0.9 0.0\nFe 0.0 0.0 1.8\n")
+            struct_path.write_text("4\n\nC 0.0 0.0 0.0\nH 1.1 0.0 0.0\nH -0.4 0.9 0.0\nSn 0.0 0.0 1.8\n")
 
 # =============================================================================
 # [7] Main Entry Point & Project Orchestrator
@@ -1231,7 +1251,7 @@ def main():
     # 集中設定區：在此處自由修改您的專案設定
     # =================================================================
     # 1. 指定您這次想要優化的 SKF 配對
-    SKF_PAIRS_TO_OPTIMIZE = ["C-C", "H-C", "H-O"]
+    SKF_PAIRS_TO_OPTIMIZE = ["Sn-Sn", "Sn-C", "Sn-O", "Sn-H"]
     
     # 2. 在此處加入任何您想客製化的 DFTB+ HSD 內容
     EXTRA_HSD_BLOCK = """
