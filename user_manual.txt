@@ -37,8 +37,8 @@ The script expects a specific directory structure to function correctly.
 ├── SKFs/                     # <-- (Input) Your original SKF files
 │   ├── C-C.skf
 │   ├── C-H.skf
-│   ├── Sn-Sn.skf
-│   ├── Sn-C.skf
+│   ├── Fe-Fe.skf
+│   ├── Fe-C.skf
 │   ├── ...
 │
 ├── data/                     # <-- (Input) Your reference geometry files
@@ -93,11 +93,11 @@ Place *all* necessary Slater-Koster files for your calculations into the `SKFs/`
 
 Open the `opt_SKFs_v7_notConfirm.py` script and go to the `main()` function at the very bottom (around line 1250). You **must** configure the two variables in the "Central Configuration Block":
 
-1.  **`SKF_PAIRS_TO_OPTIMIZE`:** List the file *stems* (names without `.skf`) of the pairs you want to optimize. The script automatically handles symmetric pairs (e.g., `Sn-C` and `C-Sn`).
+1.  **`SKF_PAIRS_TO_OPTIMIZE`:** List the file *stems* (names without `.skf`) of the pairs you want to optimize. The script automatically handles symmetric pairs (e.g., `Fe-C` and `C-Fe`).
 
     ```python
     # Example:
-    SKF_PAIRS_TO_OPTIMIZE = ["Sn-Sn", "Sn-C", "Sn-O", "Sn-H"]
+    SKF_PAIRS_TO_OPTIMIZE = ["Fe-Fe", "Fe-C", "Fe-O", "Fe-H"]
     ```
 
 2.  **`EXTRA_HSD_BLOCK`:** This multi-line string will be injected into the `dftb_in.hsd` template. This is where you *must* add the DFTB+ settings required to calculate your targets.
