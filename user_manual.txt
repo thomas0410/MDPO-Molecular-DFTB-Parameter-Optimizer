@@ -32,7 +32,7 @@ The script expects a specific directory structure to function correctly.
 
 ```
 /your_project_directory/
-├── opt_SKFs_v7_notConfirm.py  # <-- The MDPO script
+├── opt_SKFs.py  # <-- The MDPO script
 |
 ├── SKFs/                     # <-- (Input) Your original SKF files
 │   ├── C-C.skf
