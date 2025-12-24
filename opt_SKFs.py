@@ -70,7 +70,7 @@ def setup_logger(log_path: str) -> logging.Logger:
         log_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         print(f"Warning: Could not create log directory {log_dir}. Error: {e}")
-        
+
     fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(fmt)
